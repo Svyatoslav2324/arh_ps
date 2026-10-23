@@ -1,0 +1,117 @@
+@startuml sequence_monitoring_v7
+title Система мониторинга серверов — диаграмма последовательности (вариант 7)
+autonumber
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam sequence {
+  ArrowColor #315A7D
+  LifeLineBorderColor #71889A
+  LifeLineBackgroundColor #F8FBFF
+  ParticipantBorderColor #315A7D
+  ParticipantBackgroundColor #EAF3FA
+  ActorBorderColor #315A7D
+  ActorBackgroundColor #EAF3FA
+  GroupBorderColor #8CA4B7
+  GroupBackgroundColor #F6F9FC
+}
+
+participant "Приложение" as UI
+participant "Ядро\nSimulation" as Core
+participant "Календарь\nсобытий" as Cal
+participant "Источник\n(ИБ, ИЗ1)" as Src
+participant "Диспетчер\nпостановки (ДП)" as DP
+database "Общая очередь\n(Д1ОЗ2)" as Buf
+participant "Диспетчер\nвыбора (ДВ)" as DV
+participant "Прибор\nWorker" as Dev
+participant "Статистика\nи журнал" as St
+
+note over UI, St
+Вариант 7: ИБ ИЗ1 ПЗ2 Д1ОЗ2 Д1ОО3 Д2П1 Д2Б2 ОР1 ОД1.
+ИЗ1: интервал между заявками ~ Exp(λᵢ). ПЗ2: время обслуживания ~ U[a, b].
+Д1ОЗ2: постановка в конец общей очереди. Д1ОО3: при заполнении буфера
+удаляется самая старая ожидающая заявка, на её место поступает новая.
+Д2Б2: выбор последней заявки из буфера (LIFO). Д2П1: первый свободный
+прибор по приоритету номера. Приборы не вытесняются.
+end note
+
+== Инициализация ==
+loop для каждого источника i
+  Core -> Src : nextInterval()
+  Src --> Core : dt ~ Exp(λᵢ)
+  Core -> Cal : push ARRIVAL(i, t + dt)
+end
+
+== Обработка особых событий ==
+loop пока календарь событий не пуст
+  Core -> Cal : pop() — ближайшее событие
+  Cal --> Core : ARRIVAL(i, t) или RELEASE(d, t)
+
+  alt ARRIVAL — поступила заявка
+    Core -> Src : buildRequest(t)
+    Src --> Core : req = (i, j, Tвх=t)
+    Core -> St : onGenerated(req)
+    Core -> St : log(GENERATED, req, t)
+
+    alt generated < N
+      Core -> Src : nextInterval()
+      Src --> Core : dt ~ Exp(λᵢ)
+      Core -> Cal : push ARRIVAL(i, t + dt)
+    else достигнуто N заявок
+      Core -> Cal : removeAllArrivals()
+      note right of Cal
+        Новые заявки больше не генерируются.
+        События RELEASE остаются в календаре,
+        чтобы завершить обслуживание заявок.
+      end note
+    end
+
+    Core -> DP : placeRequest(req, t)
+    DP -> Buf : isFull()?
+    Buf --> DP : true / false
+    alt буфер не заполнен
+      DP -> Buf : append(req) — Д1ОЗ2
+      DP -> St : log(BUFFERED, req, t)
+    else буфер заполнен — Д1ОО3
+      DP -> Buf : removeOldest()
+      Buf --> DP : oldestReq
+      DP -> St : onRejected(oldestReq)
+      DP -> St : log(REJECTED_OLDEST, oldestReq, t)
+      DP -> Buf : append(req) — занять освободившееся место
+      DP -> St : log(BUFFERED, req, t)
+    end
+
+  else RELEASE — прибор освободился
+    Core -> Dev : complete(t)
+    Dev --> Core : servedReq
+    Core -> St : onServed(servedReq)
+    Core -> St : log(SERVED, servedReq, t)
+  end
+
+  Core -> DV : dispatch(t)
+  loop пока есть свободный прибор и заявка в буфере
+    DV -> Buf : popNewest() — Д2Б2
+    Buf --> DV : req
+    DV -> DV : найти свободный прибор
+    note right of DV
+      Д2П1: последовательный просмотр
+      приборов П1, П2, …, Пm.
+      Выбирается прибор с минимальным
+      номером среди свободных.
+    end note
+    DV -> Dev : beginService(req, t)
+    Dev -> Dev : serviceTime ~ U[a, b]
+    Dev --> DV : endAt = t + serviceTime
+    DV -> Cal : push RELEASE(d, endAt)
+    DV -> St : log(SERVICE_STARTED, req, t)
+  end
+
+  opt пошаговый режим — ОД1
+    Core -> UI : render(t, calendar, buffer, workers)
+  end
+end
+
+== Итог ==
+Core -> St : buildTables() — ОР1
+St --> Core : таблица по источникам + Kисп приборов
+Core --> UI : показать результаты моделирования
+@enduml
