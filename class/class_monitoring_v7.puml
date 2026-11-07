@@ -1,86 +1,49 @@
-@startuml class_monitoring_v7
-title Диаграмма классов — система мониторинга состояния серверов (вариант 7)
-skinparam classAttributeIconSize 0
-skinparam packageStyle rectangle
+@startuml
+' Вариант 7. Система мониторинга состояния серверов.
+' ИБ, ИЗ1, ПЗ2, Д1ОЗ2, Д1ОО3, Д2П1, Д2Б2, ОР1, ОД1.
 skinparam shadowing false
+skinparam defaultFontName DejaVu Sans
+skinparam classAttributeIconSize 0
 skinparam linetype ortho
-skinparam defaultFontName Arial
-skinparam class {
-  BackgroundColor #F8FBFF
-  BorderColor #315A7D
-  ArrowColor #315A7D
-}
-skinparam packageBorderColor #6B879E
-skinparam packageBackgroundColor #FFFFFF
+skinparam packageStyle rectangle
+hide empty members
+left to right direction
+title Диаграмма классов — имитационная модель СМО, вариант 7
 
-package "Конфигурация и интерфейс" {
+package "Событийная модель" {
   class SimulationConfig {
-    - sourceCount: int
-    - deviceCount: int
-    - bufferCapacity: int
-    - arrivalRates: double[]
-    - serviceMin: double
-    - serviceMax: double
-    - totalRequests: int
-    --
-    + validate(): bool
+    + sourceCount: int
+    + workerCount: int
+    + bufferCapacity: int
+    + arrivalRates: double[]
+    + serviceMin: double
+    + serviceMax: double
+    + requestLimit: int
   }
 
-  class ModelApp {
-    - simulation: Simulation
-    - precision: PrecisionController
-    - stepRenderer: StepRenderer
-    - resultPrinter: ResultPrinter
-    --
-    + runStepMode(): void
-    + runAutoMode(): void
-  }
-
-  class PrecisionController {
-    - t: double = 1.643
-    - delta: double = 0.1
-    - initialN: int = 100
-    --
-    + requiredN(p: double): int
-    + findN(): void
-  }
-}
-
-package "Ядро моделирования" {
   class Simulation {
-    - config: SimulationConfig
-    - sources: MonitoringSource[]
-    - workers: WorkerProcess[]
-    - buffer: QueueBuffer
-    - calendar: EventCalendar
-    - placement: PlacementDispatcher
-    - selection: SelectionDispatcher
-    - stats: StatsCollector
-    - now: double
-    --
+    - currentTime: double
+    - generatedCount: int
+    + initialize(): void
     + step(): bool
-    + runRealization(n: int): void
-    + reset(): void
-    + currentTime(): double
-    + isFinished(): bool
+    + run(): SimulationResult
+    - handleArrival(e: Event): void
+    - handleRelease(e: Event): void
   }
 
   class EventCalendar {
-    - events: PriorityQueue<TimedEvent>
-    --
-    + push(event: TimedEvent): void
-    + pop(): TimedEvent
-    + removeAllArrivals(): void
+    - events: PriorityQueue<Event>
+    + schedule(e: Event): void
+    + popNext(): Event
+    + removeArrivals(): void
     + isEmpty(): bool
   }
 
-  class TimedEvent {
-    - time: double
-    - kind: EventKind
-    - sourceId: int
-    - workerId: int
+  class Event {
+    + time: double
+    + kind: EventKind
+    + entityId: int
   }
-
   enum EventKind {
     ARRIVAL
     RELEASE
@@ -88,33 +51,20 @@ package "Ядро моделирования" {
 }
 
 package "Элементы СМО" {
-  class MonitoringSource {
-    - id: int
-    - lambda: double
-    - generated: int
-    --
+  class MonitoringSource <<ИБ, ИЗ1>> {
+    + id: int
+    + rate: double
     + nextInterval(): double
-    + buildRequest(now: double): MonitoringRequest
+    + createRequest(now: double): TelemetryRequest
   }
-
-  class MonitoringRequest {
-    - sourceId: int
-    - sequenceNo: int
-    - createdAt: double
-    - queuedAt: double
-    - serviceStartAt: double
-    - serviceEndAt: double
-    - state: RequestState
-    --
-    + markQueued(t: double): void
-    + markRejected(t: double): void
-    + markServing(t: double, endAt: double): void
-    + markServed(): void
-    + waitTime(): double
-    + serviceTime(): double
-    + sojournTime(): double
+  class TelemetryRequest {
+    + sourceId: int
+    + sequenceNumber: int
+    + arrivalTime: double
+    + startTime: double
+    + finishTime: double
+    + state: RequestState
   }
-
   enum RequestState {
     CREATED
     QUEUED
@@ -122,197 +72,94 @@ package "Элементы СМО" {
     SERVED
     REJECTED
   }
-
-  class QueueBuffer {
-    - items: Deque<MonitoringRequest>
+  class QueueBuffer <<Д1ОЗ2>> {
     - capacity: int
-    --
+    - requests: Deque<TelemetryRequest>
     + isFull(): bool
     + isEmpty(): bool
-    + append(req: MonitoringRequest): void
-    + removeOldest(): MonitoringRequest
-    + popNewest(): MonitoringRequest
-    + snapshot(): MonitoringRequest[]
+    + append(req: TelemetryRequest): void
+    + removeOldest(): TelemetryRequest
+    + removeNewest(): TelemetryRequest
   }
-
-  class WorkerProcess {
-    - id: int
-    - current: MonitoringRequest
-    - busyTotal: double
-    --
-    + isIdle(): bool
-    + beginService(req: MonitoringRequest, now: double): double
-    + complete(now: double): MonitoringRequest
-    + utilization(totalTime: double): double
+  class Worker <<ПЗ2>> {
+    + id: int
+    - currentRequest: TelemetryRequest
+    - totalBusyTime: double
+    + isFree(): bool
+    + start(req: TelemetryRequest, now: double): double
+    + finish(now: double): TelemetryRequest
   }
 }
 
-package "Диспетчеризация и политики" {
-  class PlacementDispatcher <<ДП>> {
-    - buffer: QueueBuffer
-    - admission: BufferAdmissionPolicy
-    - overflow: OverflowPolicy
-    - stats: StatsCollector
-    - journal: EventJournal
-    --
-    + placeRequest(req: MonitoringRequest, now: double): void
+package "Диспетчеризация" {
+  class PlacementDispatcher <<Д1ОЗ2 / Д1ОО3>> {
+    + enqueueOrReplace(req: TelemetryRequest): void
   }
-
-  interface BufferAdmissionPolicy <<Д1ОЗ>> {
-    + enqueue(buffer: QueueBuffer, req: MonitoringRequest): void
-  }
-  class ArrivalOrderPolicy <<Д1ОЗ2>> {
-    .. Общая очередь FIFO ..
-    Добавление в конец буфера
-  }
-
-  interface OverflowPolicy <<Д1ОО>> {
-    + handleOverflow(buffer: QueueBuffer, incoming: MonitoringRequest): MonitoringRequest
-  }
-  class DropOldestPolicy <<Д1ОО3>> {
-    .. Самая старая в буфере ..
-    Удаляет голову очереди;
-    входящая заявка занимает её место
-  }
-
-  class SelectionDispatcher <<ДВ>> {
-    - buffer: QueueBuffer
-    - workers: WorkerProcess[]
-    - calendar: EventCalendar
-    - requestPolicy: RequestSelectionPolicy
-    - devicePolicy: DeviceSelectionPolicy
-    - journal: EventJournal
-    --
-    + dispatch(now: double): void
-  }
-
-  interface RequestSelectionPolicy <<Д2Б>> {
-    + select(buffer: QueueBuffer): MonitoringRequest
-  }
-  class LifoSelectionPolicy <<Д2Б2>> {
-    .. LIFO ..
-    Выбирает последнюю заявку
-    из буфера
-  }
-
-  interface DeviceSelectionPolicy <<Д2П>> {
-    + firstIdle(workers: WorkerProcess[]): WorkerProcess
-  }
-  class LowestIdDevicePolicy <<Д2П1>> {
-    .. Приоритет номера прибора ..
-    Поиск от П1 к Пm;
-    берётся первый свободный
+  class SelectionDispatcher <<Д2П1 / Д2Б2>> {
+    + firstFreeWorker(): Worker
+    + startIncoming(req: TelemetryRequest, now: double): bool
+    + startFromQueue(now: double): bool
   }
 }
 
-package "Статистика и отображение" {
-  class StatsCollector {
-    - perSource: SourceStat[]
-    --
-    + onGenerated(req: MonitoringRequest): void
-    + onRejected(req: MonitoringRequest): void
-    + onServed(req: MonitoringRequest): void
-    + rejectProbability(): double
-    + buildTables(): ResultTables
+package "Статистика и интерфейс" {
+  class StatisticsCollector <<ОР1>> {
+    + onGenerated(req: TelemetryRequest): void
+    + onRejected(req: TelemetryRequest): void
+    + onServed(req: TelemetryRequest): void
+    + buildResult(duration: double): SimulationResult
   }
-
+  class SimulationResult {
+    + totalGenerated: int
+    + totalRejected: int
+    + rejectionProbability: double
+    + sourceStatistics: SourceStat[]
+    + utilizationByWorker: double[]
+  }
   class SourceStat {
-    - generated: int
-    - rejected: int
-    - sumWait: double
-    - sumWait2: double
-    - sumService: double
-    - sumService2: double
-    --
-    + pReject(): double
-    + meanWait(): double
-    + meanService(): double
-    + meanSojourn(): double
+    + sourceId: int
+    + generated: int
+    + rejected: int
+    + served: int
+    + meanWait: double
+    + meanService: double
   }
-
-  class ResultTables {
-    - sourceRows: SourceStat[]
-    - workerUtilization: double[]
+  class StepView <<ОД1>> {
+    + show(now: double): void
   }
-
-  class EventJournal {
-    - entries: JournalEntry[]
-    + log(kind: JournalKind, req: MonitoringRequest, t: double): void
-  }
-  class JournalEntry {
-    - time: double
-    - kind: JournalKind
-    - request: MonitoringRequest
-  }
-  enum JournalKind {
-    GENERATED
-    BUFFERED
-    REJECTED_OLDEST
-    SELECTED
-    SERVICE_STARTED
-    SERVED
-  }
-
-  class StepRenderer <<ОД1>> {
-    + render(now: double): void
-  }
-  class ResultPrinter <<ОР1>> {
-    + print(tables: ResultTables): void
+  class ResultView <<ОР1>> {
+    + show(result: SimulationResult): void
   }
 }
 
-MonitoringSource ..> MonitoringRequest : creates
-MonitoringRequest --> RequestState
-QueueBuffer o-- "0..*" MonitoringRequest
-WorkerProcess --> "0..1" MonitoringRequest : serves
-TimedEvent --> EventKind
-EventCalendar o-- "0..*" TimedEvent
-
-ModelApp --> Simulation
-ModelApp --> PrecisionController
-ModelApp --> StepRenderer
-ModelApp --> ResultPrinter
 Simulation --> SimulationConfig
-Simulation o-- "1..*" MonitoringSource
-Simulation o-- "1..*" WorkerProcess
-Simulation *-- QueueBuffer
 Simulation *-- EventCalendar
+Simulation *-- "1..*" MonitoringSource
+Simulation *-- "1..*" Worker
+Simulation *-- QueueBuffer
 Simulation *-- PlacementDispatcher
 Simulation *-- SelectionDispatcher
-Simulation *-- StatsCollector
-Simulation *-- EventJournal
+Simulation *-- StatisticsCollector
+Simulation --> StepView
 
+EventCalendar o-- "0..*" Event
+Event --> EventKind
+MonitoringSource ..> TelemetryRequest : создаёт
+TelemetryRequest --> RequestState
+QueueBuffer o-- "0..*" TelemetryRequest : ожидают
+Worker --> "0..1" TelemetryRequest : обслуживает
 PlacementDispatcher --> QueueBuffer
-PlacementDispatcher --> BufferAdmissionPolicy
-PlacementDispatcher --> OverflowPolicy
-PlacementDispatcher --> StatsCollector
-PlacementDispatcher --> EventJournal
-BufferAdmissionPolicy <|.. ArrivalOrderPolicy
-OverflowPolicy <|.. DropOldestPolicy
+PlacementDispatcher --> StatisticsCollector : фиксирует отказ
+SelectionDispatcher --> QueueBuffer : LIFO
+SelectionDispatcher --> Worker : минимальный ID
+SelectionDispatcher --> EventCalendar : планирует RELEASE
+StatisticsCollector ..> SimulationResult : формирует
+SimulationResult o-- "0..*" SourceStat
+ResultView --> SimulationResult
 
-SelectionDispatcher --> QueueBuffer
-SelectionDispatcher --> EventCalendar
-SelectionDispatcher --> WorkerProcess
-SelectionDispatcher --> RequestSelectionPolicy
-SelectionDispatcher --> DeviceSelectionPolicy
-SelectionDispatcher --> EventJournal
-RequestSelectionPolicy <|.. LifoSelectionPolicy
-DeviceSelectionPolicy <|.. LowestIdDevicePolicy
-
-StatsCollector *-- "1..*" SourceStat
-StatsCollector ..> ResultTables : builds
-EventJournal o-- "0..*" JournalEntry
-StepRenderer ..> EventCalendar
-StepRenderer ..> QueueBuffer
-StepRenderer ..> WorkerProcess
-StepRenderer ..> EventJournal
-ResultPrinter ..> ResultTables
-PrecisionController --> Simulation
-
-note bottom of Simulation
-Моделирование по методу особых событий:
-ARRIVAL — приход заявки; RELEASE — освобождение прибора.
-После генерации N-й заявки новые ARRIVAL удаляются,
-но обслуживание оставшихся заявок продолжается до опустошения календаря.
+note bottom of QueueBuffer
+  Заявки хранятся от старой к новой.
+  При переполнении удаляется первая.
+  При выборе на обслуживание — последняя.
 end note
 @enduml
